@@ -110,16 +110,18 @@ class ExifHeader:
     def list_ifd(self):
         """Return the list of IFDs in the header."""
         i = self._first_ifd()
-        ifds = []
+        ifd_list = []
         while i:
-            ifds.append(i)
+            ifd_list.append(i)
             i = self._next_ifd(i)
-        return ifds
+        return ifd_list
 
     def dump_ifd(self, ifd, ifd_name, tag_dict=EXIF_TAGS, relative=0, stop_tag=DEFAULT_STOP_TAG):
         """
         Return a list of entries in the given IFD.
         """
+        self.tags[ifd_name] = {}
+
         # make sure we can process the entries
         try:
             entries = self.s2n(ifd, 2)
@@ -250,16 +252,16 @@ class ExifHeader:
                                 # use lookup table for this tag
                                 printable += tag_entry[1].get(i, repr(i))
 
-                self.tags[ifd_name + ' ' + tag_name] = IfdTag(printable, tag,
-                                                              field_type,
-                                                              values, field_offset,
-                                                              count * type_length)
+                self.tags[ifd_name][tag_name] = IfdTag(printable, tag,
+                                                       field_type,
+                                                       values, field_offset,
+                                                       count * type_length)
                 try:
-                    tag_value = repr(self.tags[ifd_name + ' ' + tag_name])
+                    tag_value = repr(self.tags[ifd_name][tag_name])
                 # fix for python2's handling of unicode values
                 except UnicodeEncodeError:
-                    tag_value = unicode(self.tags[ifd_name + ' ' + tag_name])
-                logger.debug(' %s: %s', tag_name, tag_value)
+                    tag_value = unicode(self.tags[ifd_name][tag_name])
+                logger.debug(' %s %s: %s', ifd_name, tag_name, tag_value)
 
             if tag_name == stop_tag:
                 break
@@ -271,7 +273,7 @@ class ExifHeader:
         Take advantage of the pre-existing layout in the thumbnail IFD as
         much as possible
         """
-        thumb = self.tags.get('Thumbnail Compression')
+        thumb = self.tags['Thumbnail'].get('Compression')
         if not thumb or thumb.printable != 'Uncompressed TIFF':
             return
 
@@ -314,8 +316,8 @@ class ExifHeader:
                 tiff += self.file.read(count * type_length)
 
         # add pixel strips and update strip offset info
-        old_offsets = self.tags['Thumbnail StripOffsets'].values
-        old_counts = self.tags['Thumbnail StripByteCounts'].values
+        old_offsets = self.tags['Thumbnail']['StripOffsets'].values
+        old_counts = self.tags['Thumbnail']['StripByteCounts'].values
         for i in range(len(old_offsets)):
             # update offset pointer (more nasty "strings are immutable" crap)
             offset = self.n2s(len(tiff), strip_len)
@@ -333,19 +335,22 @@ class ExifHeader:
 
         (Thankfully the JPEG data is stored as a unit.)
         """
-        thumb_offset = self.tags.get('Thumbnail JPEGInterchangeFormat')
+        thumb_offset = self.tags['Thumbnail'].get('JPEGInterchangeFormat')
         if thumb_offset:
             self.file.seek(self.offset + thumb_offset.values[0])
-            size = self.tags['Thumbnail JPEGInterchangeFormatLength'].values[0]
+            size = self.tags['Thumbnail']['JPEGInterchangeFormatLength'].values[0]
             self.tags['JPEGThumbnail'] = self.file.read(size)
 
         # Sometimes in a TIFF file, a JPEG thumbnail is hidden in the MakerNote
         # since it's not allowed in a uncompressed TIFF IFD
         if 'JPEGThumbnail' not in self.tags:
-            thumb_offset = self.tags.get('MakerNote JPEGThumbnail')
-            if thumb_offset:
-                self.file.seek(self.offset + thumb_offset.values[0])
-                self.tags['JPEGThumbnail'] = self.file.read(thumb_offset.field_length)
+            try:
+                thumb_offset = self.tags['MakerNote']['JPEGThumbnail']
+                if thumb_offset:
+                    self.file.seek(self.offset + thumb_offset.values[0])
+                    self.tags['JPEGThumbnail'] = self.file.read(thumb_offset.field_length)
+            except KeyError:
+                pass
 
     def decode_maker_note(self):
         """
@@ -368,12 +373,16 @@ class ExifHeader:
         follow EXIF format internally.  Once they did, it's ambiguous whether
         the offsets should be from the header at the start of all the EXIF info,
         or from the header at the start of the makernote.
+        Some apps use MakerNote tags but do not use a format for which we
+        have a description, so just do a raw dump for these.
         """
-        note = self.tags['EXIF MakerNote']
 
-        # Some apps use MakerNote tags but do not use a format for which we
-        # have a description, so just do a raw dump for these.
-        make = self.tags['Image Make'].printable
+        try:
+            note = self.tags['EXIF']['MakerNote']
+            make = self.tags['Image']['Make'].printable
+        except KeyError:
+            logger.debug("No MakerNote tag or Make not specified")
+            return
 
         # Nikon
         # The maker note usually starts with the word Nikon, followed by the
@@ -448,17 +457,17 @@ class ExifHeader:
             self.dump_ifd(note.field_offset, 'MakerNote',
                           tag_dict=makernote.canon.TAGS)
 
-            for i in (('MakerNote Tag 0x0001', makernote.canon.CAMERA_SETTINGS),
-                      ('MakerNote Tag 0x0002', makernote.canon.FOCAL_LENGTH),
-                      ('MakerNote Tag 0x0004', makernote.canon.SHOT_INFO),
-                      ('MakerNote Tag 0x0026', makernote.canon.AF_INFO_2),
-                      ('MakerNote Tag 0x0093', makernote.canon.FILE_INFO)):
-                if i[0] in self.tags:
+            for i in (('Tag 0x0001', makernote.canon.CAMERA_SETTINGS),
+                      ('Tag 0x0002', makernote.canon.FOCAL_LENGTH),
+                      ('Tag 0x0004', makernote.canon.SHOT_INFO),
+                      ('Tag 0x0026', makernote.canon.AF_INFO_2),
+                      ('Tag 0x0093', makernote.canon.FILE_INFO)):
+                if i[0] in self.tags['MakerNote']:
                     logger.debug('Canon ' + i[0])
-                    self._canon_decode_tag(self.tags[i[0]].values, i[1])
-                    del self.tags[i[0]]
-            if makernote.canon.CAMERA_INFO_TAG_NAME in self.tags:
-                tag = self.tags[makernote.canon.CAMERA_INFO_TAG_NAME]
+                    self._canon_decode_tag(self.tags['MakerNote'][i[0]]. values, i[1])
+                    del self.tags['MakerNote'][i[0]]
+            if makernote.canon.CAMERA_INFO_TAG_NAME in self.tags['MakerNote']:
+                tag = self.tags['MakerNote'][makernote.canon.CAMERA_INFO_TAG_NAME]
                 logger.debug('Canon CameraInfo')
                 self._canon_decode_camera_info(tag)
                 del self.tags[makernote.canon.CAMERA_INFO_TAG_NAME]
@@ -488,16 +497,14 @@ class ExifHeader:
 
             # it's not a real IFD Tag but we fake one to make everybody
             # happy. this will have a "proprietary" type
-            self.tags['MakerNote ' + name] = IfdTag(str(val), None, 0, None,
-                                                    None, None)
+            self.tags['MakerNote'][name] = IfdTag(str(val), None, 0, None,
+                                                  None, None)
 
     def _canon_decode_camera_info(self, camera_info_tag):
         """
         Decode the variable length encoded camera info section.
         """
-        model = self.tags.get('Image Model', None)
-        if not model:
-            return
+        model = self.tags['Image']['Model']
         model = str(model.values)
 
         camera_info_tags = None
@@ -532,8 +539,8 @@ class ExifHeader:
                     tag_value = tag[2].get(tag_value, tag_value)
             logger.debug(" %s %s", tag_name, tag_value)
 
-            self.tags['MakerNote ' + tag_name] = IfdTag(str(tag_value), None,
-                                                        0, None, None, None)
+            self.tags['MakerNote'][tag_name] = IfdTag(str(tag_value), None,
+                                                      0, None, None, None)
 
     def parse_xmp(self, xmp_string):
         import xml.dom.minidom
@@ -546,5 +553,6 @@ class ExifHeader:
         for line in pretty.splitlines():
             if line.strip():
                 cleaned.append(line)
-        self.tags['Image ApplicationNotes'] = IfdTag('\n'.join(cleaned), None,
+
+        self.tags['Image']['ApplicationNotes'] = IfdTag('\n'.join(cleaned), None,
                                                      1, None, None, None)
