@@ -2,6 +2,9 @@
 Change Log
 **********
 
+3.0.0 — 2020-xx-xx
+    * **BREAKING CHANGE:** Add type hints, which removes Python2 compatibility
+
 2.3.1 — 2020-08-07
     * Fix bug introduced with v2.3.0 in HEIC processing.
 

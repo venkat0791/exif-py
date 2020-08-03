@@ -10,7 +10,7 @@ from .tags import DEFAULT_STOP_TAG
 from .utils import ord_, make_string
 from .heic import HEICExifFinder
 
-__version__ = '2.3.1'
+__version__ = '3.0.0'
 
 logger = get_logger()
 
@@ -25,7 +25,7 @@ def increment_base(data, base):
     return ord_(data[base + 2]) * 256 + ord_(data[base + 3]) + 2
 
 
-def _find_tiff_exif(fh):
+def _find_tiff_exif(fh) -> tuple:
     logger.debug("TIFF format recognized in data[0:2]")
     fh.seek(0)
     endian = fh.read(1)
@@ -34,7 +34,7 @@ def _find_tiff_exif(fh):
     return offset, endian
 
 
-def _find_webp_exif(fh):
+def _find_webp_exif(fh) -> tuple:
     logger.debug("WebP format recognized in data[0:4], data[8:12]")
     # file specification: https://developers.google.com/speed/webp/docs/riff_container
     data = fh.read(5)
@@ -56,7 +56,7 @@ def _find_webp_exif(fh):
     raise ExifNotFound()
 
 
-def _find_jpeg_exif(fh, data, fake_exif):
+def _find_jpeg_exif(fh, data, fake_exif) -> tuple:
     logger.debug("JPEG format recognized data[0:2]=0x%X%X", ord_(data[0]), ord_(data[1]))
     base = 2
     logger.debug("data[2]=0x%X data[3]=0x%X data[6:10]=%s", ord_(data[2]), ord_(data[3]), data[6:10])
@@ -189,7 +189,7 @@ def _find_jpeg_exif(fh, data, fake_exif):
     return offset, endian, fake_exif
 
 
-def _get_xmp(fh):
+def _get_xmp(fh) -> bytes:
     xmp_string = b''
     logger.debug('XMP not in Exif, searching file for XMP info...')
     xml_started = False
@@ -309,5 +309,4 @@ def process_file(fh, stop_tag=DEFAULT_STOP_TAG,
             xmp_string = _get_xmp(fh)
         if xmp_string:
             hdr.parse_xmp(xmp_string)
-
     return hdr.tags
